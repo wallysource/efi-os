@@ -1734,10 +1734,11 @@ typedef struct {
 } PCI_DEVICE;
 
 typedef struct {
-    UINT64 HeapID;
+    UINT8 HeapID;
     UINT64 StartAddress;
     UINT64 Size;
     BOOLEAN Used;
+    UINTN NumberOfPackets;
 } MemBlock;
 
 typedef struct {
@@ -1885,43 +1886,6 @@ void GetKey()
 {
     uefi_call_wrapper(SystemTable->BootServices->WaitForEvent,3,1,&SystemTable->ConIn->WaitForKey,NULL);
     uefi_call_wrapper(SystemTable->ConIn->ReadKeyStroke, 1, SystemTable->ConIn, &key);
-}
-void GetCMem()
-{
-    UINTN MapSize = 97;
-    UINTN MapKey = 0;
-    UINTN DescSize = 0;
-    UINT32 DescVersion = 0;
-    EFI_MEMORY_DESCRIPTOR *MemoryMap = NULL;
-    status = uefi_call_wrapper(SystemTable->BootServices->GetMemoryMap,5,&MapSize,MemoryMap,&MapKey,&DescSize,&DescVersion);
-    MapSize += 4*DescSize;
-    status = uefi_call_wrapper(SystemTable->BootServices->AllocatePool,3,EfiLoaderData,MapSize,(VOID **)&MemoryMap);
-    status = uefi_call_wrapper(SystemTable->BootServices->GetMemoryMap,5,&MapSize,MemoryMap,&MapKey,&DescSize,&DescVersion);
-    UINT64 totalpages =0;
-    UINT8 *MapEnd = (UINT8*)MemoryMap + MapSize;
-    UINTN i=0;
-    for(UINT8 *p = (UINT8*)MemoryMap; p< MapEnd; p+=DescSize)
-    {
-        EFI_MEMORY_DESCRIPTOR *d = (EFI_MEMORY_DESCRIPTOR*)p;
-        if(d->Type == EfiConventionalMemory)
-        {
-            totalpages += d->NumberOfPages;
-            mblock[i].StartAddress = d->PhysicalStart;
-            mblock[i].Size = d->NumberOfPages * EFI_PAGE_SIZE;
-            mblock[i].Used=false;
-            Print(L"%llu's memory StartAddress %llu Size %llu",i,mblock[i].StartAddress,mblock[i].Size);
-            GetKey();
-            i++;
-        }
-    }
-    UINT64 totalbytes = totalpages * 4096;
-    Print(L"Conventional RAM : %llu MB\n", (totalbytes / (1024 * 1024)));
-    MapInfo.MemMapSize = MapSize;
-    MapInfo.MemMapKey = MapKey;
-    MapInfo.MemDescSize = DescSize;
-    MapInfo.MemDescVersion = DescVersion;
-    MapInfo.MemMap = MemoryMap;
-    MapInfo.BlockCount = i;
 }
 void testkey()
 {
@@ -2097,9 +2061,6 @@ static void ProbeOne(EFI_PCI_IO_PROTOCOL *PciIo,
     {
         bar5 = bar5 & 0xFFFFFFF0;
     }
-
-    Print(L"PCI %u:%02x:%02x.%u VID=%04x DID=%04x Class=%02x Sub=%02x ProgIF=%02x\n",
-          seg, bus, dev, fun, vid, did, base, sub, progIf);
 }
 
 void PCIHelperf()
@@ -2137,7 +2098,6 @@ void PCIHelperf()
         PciDevices[i].Bar[3]=bar3;
         PciDevices[i].Bar[4]=bar4;
         PciDevices[i].Bar[5]=bar5;
-        Print(L"raw Bar %llu and BaseAddress %llu\n", bar,BaseAddress);
     }
 
     if (handles) FreePool(handles);
@@ -2163,6 +2123,65 @@ void ScFade(UINT32 start,UINT32 end)
         FillScreen(col);
     }
 }
+void GetCMem()
+{
+    UINTN MapSize = 97;
+    UINTN MapKey = 0;
+    UINTN DescSize = 0;
+    UINT32 DescVersion = 0;
+    EFI_MEMORY_DESCRIPTOR *MemoryMap = NULL;
+    status = uefi_call_wrapper(SystemTable->BootServices->GetMemoryMap,5,&MapSize,MemoryMap,&MapKey,&DescSize,&DescVersion);
+    MapSize += 4*DescSize;
+    status = uefi_call_wrapper(SystemTable->BootServices->AllocatePool,3,EfiLoaderData,MapSize,(VOID **)&MemoryMap);
+    status = uefi_call_wrapper(SystemTable->BootServices->GetMemoryMap,5,&MapSize,MemoryMap,&MapKey,&DescSize,&DescVersion);
+    UINT64 totalpages =0;
+    UINT8 *MapEnd = (UINT8*)MemoryMap + MapSize;
+    UINTN i=0;
+    for(UINT8 *p = (UINT8*)MemoryMap; p< MapEnd; p+=DescSize)
+    {
+        EFI_MEMORY_DESCRIPTOR *d = (EFI_MEMORY_DESCRIPTOR*)p;
+        if(d->Type == EfiConventionalMemory)
+        {
+            totalpages += d->NumberOfPages;
+            mblock[i].StartAddress = d->PhysicalStart;
+            mblock[i].Size = d->NumberOfPages * EFI_PAGE_SIZE;
+            mblock[i].Used=false;
+            Print(L"%llu's memory StartAddress %llu Size %llu \n",i,mblock[i].StartAddress,mblock[i].Size);
+            GetKey();
+            i++;
+        }
+    }
+    UINT64 totalbytes = totalpages * 4096;
+    Print(L"Conventional RAM : %llu MB\n", (totalbytes / (1024 * 1024)));
+    MapInfo.MemMapSize = MapSize;
+    MapInfo.MemMapKey = MapKey;
+    MapInfo.MemDescSize = DescSize;
+    MapInfo.MemDescVersion = DescVersion;
+    MapInfo.MemMap = MemoryMap;
+    MapInfo.BlockCount = i;
+}
+void MemHelperf()
+{
+    int section = 0;
+    int numberofsections = 0;
+    for(section =0;section<MapInfo.BlockCount;section++)
+    {
+        numberofsections += (mblock[section].Size);
+    }
+    MemBlock MemHelperV[numberofsections];
+    for(section =0;section<MapInfo.BlockCount;section++)
+    {
+        for(int i=0;i<(mblock[section].Size);i++)
+        {
+            MemHelperV[i].HeapID = section;
+            MemHelperV[i].StartAddress = mblock[section].StartAddress + 0x1000*i;
+            MemHelperV[i].Size = EFI_PAGE_SIZE;
+            MemHelperV[i].Used=false;
+        }
+        Print(L"section number %llu has %llu pages total",section,mblock[section].Size);
+        GetKey();
+    }
+}
 EFI_STATUS EFIAPI efi_main(EFI_HANDLE gImageHandle, EFI_SYSTEM_TABLE *gSystemTable)
 {
     EFI_PCI_IO *PciIoProtocol;
@@ -2186,6 +2205,8 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE gImageHandle, EFI_SYSTEM_TABLE *gSystemTab
     DrawRect(1820,1031,50,1031,0x000077FF);
     FillScreen(0x00000000);
     GetCMem();
+    GetKey();
+    MemHelperf();
     while(1);
     return EFI_SUCCESS;
 }
